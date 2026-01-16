@@ -72,6 +72,14 @@ app.get('/download/:filename', (req, res) => {
     });
 
     fileStream.pipe(res);
+
+    // Auto-cleanup: Delete file after download completes
+    res.on('finish', () => {
+        fs.unlink(filePath, (err) => {
+            if (err) console.error(`[CLEANUP] Erro ao deletar ${filename}:`, err);
+            else console.log(`[CLEANUP] Arquivo removido: ${filename}`);
+        });
+    });
 });
 
 // Ensure output directory exists

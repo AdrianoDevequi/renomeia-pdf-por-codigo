@@ -4,3 +4,7 @@ output/
 .env
 *.zip
 *.log
+debug_*.js
+eng.traineddata
+
+
