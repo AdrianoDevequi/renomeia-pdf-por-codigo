@@ -5,6 +5,7 @@ output/
 *.zip
 *.log
 debug_*.js
+create_deploy_zip.js
 eng.traineddata
 
 
