@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Renomear PDF por Rastreamento</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Renomeador de PDF</h1>
+            <p>Arraste arquivos ou clique para selecionar. O sistema renomeará baseado no código "OBJETO
+                (RASTREAMENTO)".</p>
+        </header>
+
+        <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+            <div class="drop-zone" id="dropZone">
+                <span class="drop-zone__prompt">Arraste seus PDFs aqui ou clique p/ upload</span>
+                <input type="file" name="pdfs" class="drop-zone__input" id="fileInput" multiple accept=".pdf">
+            </div>
+            <div id="fileList" class="file-list"></div>
+            <button type="submit" class="btn" id="submitBtn" disabled>Processar e Baixar</button>
+        </form>
+
+        <div id="status" class="status"></div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const input = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const submitBtn = document.getElementById('submitBtn');
+        const form = document.getElementById('uploadForm');
+        const status = document.getElementById('status');
+
+        dropZone.addEventListener('click', () => input.click());
+
+        input.addEventListener('change', updateFileList);
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drop-zone--over');
+        });
+
+        ['dragleave', 'dragend'].forEach(type => {
+            dropZone.addEventListener(type, () => {
+                dropZone.classList.remove('drop-zone--over');
+            });
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drop-zone--over');
+            if (e.dataTransfer.files.length) {
+                input.files = e.dataTransfer.files;
+                updateFileList();
+            }
+        });
+
+        function updateFileList() {
+            fileList.innerHTML = '';
+            if (input.files.length > 0) {
+                submitBtn.disabled = false;
+                Array.from(input.files).forEach(file => {
+                    const div = document.createElement('div');
+                    div.className = 'file-item';
+                    div.textContent = `📄 ${file.name}`;
+                    fileList.appendChild(div);
+                });
+            } else {
+                submitBtn.disabled = true;
+            }
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Generate unique ID for this upload session
+            const uploadId = Date.now().toString();
+
+            // Setup SSE connection
+            const eventSource = new EventSource(`/events/${uploadId}`);
+
+            status.innerHTML = '<span class="spinner"></span> Iniciando...';
+            status.style.color = '#333';
+            submitBtn.disabled = true;
+
+            // Handle progress messages
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'progress') {
+                    status.innerHTML = `<span class="spinner"></span> ${data.message}`;
+                } else if (data.type === 'complete') {
+                    // Success Message (Green)
+                    let finalHtml = '<div style="color: #28a745; font-weight: bold; font-size: 1.1em; margin-bottom: 15px;">Processo finalizado! O download iniciará em breve...</div>';
+
+                    // Error List (Red and Smaller)
+                    if (data.failedFiles && data.failedFiles.length > 0) {
+                        finalHtml += '<div style="color: #dc3545; font-size: 0.9em; background-color: #fff5f5; padding: 15px; border-radius: 8px; border: 1px solid #ffc9c9; text-align: left;">';
+                        finalHtml += '<strong style="display: block; margin-bottom: 8px;">⚠️ Alguns arquivos não puderam ser renomeados:</strong>';
+                        finalHtml += '<ul style="margin: 0; padding-left: 20px;">';
+                        data.failedFiles.forEach(f => {
+                            finalHtml += `<li style="margin-bottom: 4px;"><strong>${f.filename}</strong>: ${f.reason}</li>`;
+                        });
+                        finalHtml += '</ul></div>';
+                    }
+
+                    status.innerHTML = finalHtml;
+                    // Reset status color override
+                    status.style.color = '';
+
+                    // Trigger download
+                    window.location.href = data.url;
+
+                    eventSource.close();
+                    submitBtn.disabled = false;
+                } else if (data.type === 'error') {
+                    status.innerHTML = '<span style="color: #dc3545;">Erro: ' + data.message + '</span>';
+                    eventSource.close();
+                    submitBtn.disabled = false;
+                }
+            };
+
+            eventSource.onerror = (err) => {
+                console.error('EventSource error:', err);
+            };
+
+            const formData = new FormData(form);
+
+            try {
+                // Send files with ID in query string
+                const response = await fetch(`/upload?id=${uploadId}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    status.textContent = 'Erro no envio dos arquivos.';
+                    status.style.color = 'red';
+                    eventSource.close();
+                    submitBtn.disabled = false;
+                }
+            } catch (err) {
+                status.textContent = 'Erro de conexão.';
+                status.style.color = 'red';
+                eventSource.close();
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+
+</html>
