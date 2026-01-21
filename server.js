@@ -8,12 +8,13 @@ const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 
 const app = express();
 
-// Ensure uploads directory exists
-if (!fs.existsSync('uploads')) {
-    fs.mkdirSync('uploads');
+// Ensure uploads directory exists in /tmp (writable in serverless)
+const UPLOAD_DIR = '/tmp/uploads';
+if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: UPLOAD_DIR + '/' });
 
 // Store SSE connections
 const clients = new Map();
@@ -40,7 +41,8 @@ app.get('/events/:id', (req, res) => {
 // Download Endpoint
 app.get('/download/:filename', (req, res) => {
     const filename = req.params.filename;
-    const filePath = path.join(__dirname, 'output', filename);
+    // Use /tmp/output for downloads
+    const filePath = path.join('/tmp/output', filename);
 
     console.log(`[DOWNLOAD] Solicitado: ${filename}`);
     console.log(`[DOWNLOAD] Caminho completo: ${filePath}`);
@@ -82,9 +84,10 @@ app.get('/download/:filename', (req, res) => {
     });
 });
 
-// Ensure output directory exists
-if (!fs.existsSync('output')) {
-    fs.mkdirSync('output');
+// Ensure output directory exists in /tmp
+const OUTPUT_DIR = '/tmp/output';
+if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
 function sendProgress(id, message) {
@@ -279,7 +282,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             // Single file
             const file = processedFiles[0];
             const outputFilename = file.filename;
-            const outputPath = path.join(__dirname, 'output', outputFilename);
+            const outputPath = path.join(OUTPUT_DIR, outputFilename);
 
             // Move file to output
             fs.copyFileSync(file.path, outputPath);
@@ -291,7 +294,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
         } else {
             // Multiple files - ZIP
             const outputFilename = `arquivos_renomeados_${Date.now()}.zip`;
-            const zipPath = path.join(__dirname, 'output', outputFilename);
+            const zipPath = path.join(OUTPUT_DIR, outputFilename);
             const output = fs.createWriteStream(zipPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
 
