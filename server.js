@@ -19,7 +19,11 @@ const upload = multer({ dest: UPLOAD_DIR + '/' });
 // Store SSE connections
 const clients = new Map();
 
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 // SSE Endpoint
 app.get('/events/:id', (req, res) => {
