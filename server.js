@@ -146,12 +146,10 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 const uint8Data = new Uint8Array(dataBuffer);
 
                 // Load PDF document
-                // Fix: Specify standard font path to avoid "FoxitSerif.pfb" errors
-                const standardFontDataUrl = path.join(__dirname, 'node_modules/pdfjs-dist/standard_fonts/');
-
+                // Remove explicit font path, rely on default or internal resolution
                 const loadingTask = pdfjsLib.getDocument({
                     data: uint8Data,
-                    standardFontDataUrl: standardFontDataUrl
+                    // standardFontDataUrl: ... // Removing this as it might be wrong in Vercel
                 });
 
                 const doc = await loadingTask.promise;
@@ -248,13 +246,13 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                     filename: finalFilename
                 });
 
-            } else {
                 let reason = 'Código não encontrado';
                 if (isScanned) {
-                    reason = 'O arquivo é uma IMAGEM (não contém texto digital)';
+                    reason = `IMAGEM ou Texto ilegível (Extracted: ${fullText.length} chars)`;
                     sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: ${reason}`);
                 } else {
-                    sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: Código não encontrado.`);
+                    reason = `Código não encontrado (Texto: ${fullText.length} chars)`;
+                    sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: ${reason}`);
                 }
 
                 failedFiles.push({
@@ -272,7 +270,9 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
         if (processedFiles.length === 0) {
             // Even if 0 processed, send error but with list of failures if available
             if (failedFiles.length > 0) {
-                sendError(uploadId, `Nenhum arquivo válido. Falhas: ${failedFiles.map(f => f.filename).join(', ')}`);
+                // Return detailed reasons in the error message
+                const details = failedFiles.map(f => `${f.filename} (${f.reason})`).join(', ');
+                sendError(uploadId, `Falha ao processar arquivos. Detalhes: ${details}`);
             } else {
                 sendError(uploadId, 'Nenhum arquivo válido foi processado.');
             }
