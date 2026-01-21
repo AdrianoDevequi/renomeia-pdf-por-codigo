@@ -3,8 +3,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
-// Use legacy build for Node.js CommonJS compatibility
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+const pdf = require('pdf-parse');
 
 const app = express();
 
@@ -142,27 +141,9 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
 
             let fullText = '';
             try {
-                // Convert Buffer to Uint8Array
-                const uint8Data = new Uint8Array(dataBuffer);
-
-                // Load PDF document
-                // Remove explicit font path, rely on default or internal resolution
-                const loadingTask = pdfjsLib.getDocument({
-                    data: uint8Data,
-                    // standardFontDataUrl: ... // Removing this as it might be wrong in Vercel
-                });
-
-                const doc = await loadingTask.promise;
-
-                // Iterate over all pages
-                const numPages = doc.numPages;
-                for (let i = 1; i <= numPages; i++) {
-                    const page = await doc.getPage(i);
-                    const content = await page.getTextContent();
-
-                    const strings = content.items.map(item => item.str);
-                    fullText += strings.join(' ') + '\n';
-                }
+                // Use pdf-parse to extract text
+                const data = await pdf(dataBuffer);
+                fullText = data.text;
 
             } catch (err) {
                 console.error('[PDF ERROR]', err);
