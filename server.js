@@ -246,6 +246,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                     filename: finalFilename
                 });
 
+            } else {
                 let reason = 'Código não encontrado';
                 if (isScanned) {
                     reason = `IMAGEM ou Texto ilegível (Extracted: ${fullText.length} chars)`;
