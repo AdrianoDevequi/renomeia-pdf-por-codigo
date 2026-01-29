@@ -178,13 +178,16 @@ function findTrackingCode(text) {
     if (!text) return null;
 
     // 1. Context Search: Prioritize codes near keywords (Highest Priority)
-    const contextRegex = /(?:OBJETO|RASTREAMENTO|CORREIOS)\s*[:\-]?\s*([A-Z0-9\s\.]{13,25})/gi;
+    // Refined regex to handle (RASTREAMENTO) and other variations
+    const contextRegex = /(?:OBJETO(?:\s*\(RASTREAMENTO\))?|RASTREAMENTO|CORREIOS)\s*[:\-]?\s*([A-Z0-9\s\.]{13,30})/gi;
     let contextMatch;
     while ((contextMatch = contextRegex.exec(text)) !== null) {
         const raw = contextMatch[1].replace(/[^A-Z0-9]/gi, '').toUpperCase();
         const code = validateAndNormalizeCode(raw);
-        if (code) {
-            console.log(`[MATCH] Prioridade Máxima (Contexto): ${code}`);
+
+        // MANDATORY: In this project, correct codes ALWAYS end in BR
+        if (code && code.endsWith('BR')) {
+            console.log(`[MATCH] Prioridade Máxima (Contexto + BR): ${code}`);
             return code;
         }
     }
@@ -196,16 +199,18 @@ function findTrackingCode(text) {
     for (let i = 0; i <= cleaned.length - 13; i++) {
         const segment = cleaned.substring(i, i + 13);
         const code = validateAndNormalizeCode(segment);
-        if (code) {
-            let score = 0;
-            // Major boost for Brazilian local codes
-            if (code.endsWith('BR')) score += 100;
 
-            // Penalty for "barcode noise" (strings like LI111111111LL)
+        // Only consider codes that end in BR (as specified by user)
+        if (code && code.endsWith('BR')) {
+            let score = 100; // Base score for BR codes
+
+            // Penalty for "barcode noise" even if it ends in BR by some miracle
             const middleDigits = code.substring(2, 11);
             const uniqueChars = new Set(middleDigits).size;
-            if (uniqueChars <= 3) score -= 40; // Likely garbage if too few unique digits
-            if (code.includes('111111')) score -= 20;
+
+            if (uniqueChars <= 3) score -= 80;
+            if (middleDigits === '111111111' || middleDigits === '000000000') score -= 150;
+            if (code.startsWith('LI')) score -= 50;
 
             candidates.push({ code, score });
         }
@@ -214,8 +219,13 @@ function findTrackingCode(text) {
     if (candidates.length > 0) {
         // Sort by score descending
         candidates.sort((a, b) => b.score - a.score);
-        console.log(`[DEBUG] Melhor candidato: ${candidates[0].code} (Score: ${candidates[0].score})`);
-        return candidates[0].code;
+
+        console.log(`[DEBUG] Melhor candidato BR: ${candidates[0].code} (Score: ${candidates[0].score})`);
+
+        // Only return if it's a high-quality match
+        if (candidates[0].score > 0) {
+            return candidates[0].code;
+        }
     }
 
     return null;
