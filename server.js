@@ -192,7 +192,8 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             // Tracking code is [2 chars] [9 digits] [2 chars]
             const regexContext = /(?:OBJETO)?\s*\(RASTREAMENTO\)\s*:\s*(?:Correios\s*)?([A-Z]{2}\s*(?:\d\s*){9}[A-Z]{2})/i;
             const regexFallback = /([A-Z]{2})\s*((?:\d\s*){9})\s*([A-Z]{2})/i;
-            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl\s]{9,15})\s*([A-Z]{2})/i;
+            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl\s]{9,18})\s*([A-Z]{2})/i;
+            const regexLoose = /([A-Z]\s*[A-Z])\s*((?:\d\s*){9,15})\s*([A-Z]\s*[A-Z])/i;
 
             let match = fullText.match(regexContext);
             let code = null;
@@ -209,6 +210,13 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                     code = `${matchFallback[1]}${matchFallback[2].replace(/\s+/g, '')}${matchFallback[3]}`.toUpperCase();
                     sendProgress(uploadId, `(${count}/${req.files.length}) ℹ️ Código detectado (Fallback): ${code}`);
                     console.log(`[MATCH] Fallback encontrou: ${code}`);
+                }
+                if (!code) {
+                    const matchLoose = fullText.match(regexLoose);
+                    if (matchLoose) {
+                        code = (matchLoose[1] + matchLoose[2] + matchLoose[3]).replace(/\s+/g, '').toUpperCase();
+                        console.log(`[MATCH] Loose encontrou: ${code}`);
+                    }
                 }
             }
 
@@ -247,6 +255,14 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                                 code = `${prefix}${cleanDigits}${suffix}`;
                                 console.log(`[MATCH-OCR] Fuzzy encontrou: ${code}`);
                             }
+                        }
+                    }
+
+                    if (!code) {
+                        const matchLoose = fullText.match(regexLoose);
+                        if (matchLoose) {
+                            code = (matchLoose[1] + matchLoose[2] + matchLoose[3]).replace(/\s+/g, '').toUpperCase();
+                            console.log(`[MATCH-OCR] Loose encontrou: ${code}`);
                         }
                     }
                 }
