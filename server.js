@@ -153,27 +153,32 @@ async function performOCR(pdfPath, uploadId, count, total) {
 function findTrackingCode(text) {
     if (!text) return null;
 
-    // Clean text: remove all whitespace and normalize to uppercase
-    const cleaned = text.replace(/\s+/g, '').toUpperCase();
+    // Clean text: remove all whitespace AND punctuation, normalize to uppercase
+    const cleaned = text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    console.log(`[DEBUG] Texto ultra-limpo (${cleaned.length} chars): ${cleaned.substring(0, 40)}...`);
 
     // Strategy 1: Perfect match (2 letters + 9 digits + 2 letters)
     const m1 = cleaned.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
     if (m1) return m1[0];
 
-    // Strategy 2: Fuzzy match (handle O=0, S=5, etc.) anywhere in the string
+    // Strategy 2: Fuzzy match (handle O=0, S=5, etc.) sliding window
     for (let i = 0; i <= cleaned.length - 13; i++) {
         const segment = cleaned.substring(i, i + 13);
         const prefix = segment.substring(0, 2);
         const middle = segment.substring(2, 11);
         const suffix = segment.substring(11, 13);
 
+        // Check if prefix and suffix are letters
         if (/^[A-Z]{2}$/.test(prefix) && /^[A-Z]{2}$/.test(suffix)) {
+            // Convert fuzzy digits
             const digits = middle
                 .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
                 .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
 
             if (/^\d{9}$/.test(digits)) {
-                return `${prefix}${digits}${suffix}`;
+                const found = `${prefix}${digits}${suffix}`;
+                console.log(`[MATCH] Encontrado via fuzzy window: ${found}`);
+                return found;
             }
         }
     }
@@ -263,68 +268,67 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
             }
         }
-    }
 
 
-if (processedFiles.length === 0) {
-        // Even if 0 processed, send error but with list of failures if available
-        if (failedFiles.length > 0) {
-            // Return detailed reasons in the error message
-            const details = failedFiles.map(f => `${f.filename} (${f.reason})`).join(', ');
-            sendError(uploadId, `Falha ao processar arquivos. Detalhes: ${details}`);
-        } else {
-            sendError(uploadId, 'Nenhum arquivo válido foi processado.');
+        if (processedFiles.length === 0) {
+            // Even if 0 processed, send error but with list of failures if available
+            if (failedFiles.length > 0) {
+                // Return detailed reasons in the error message
+                const details = failedFiles.map(f => `${f.filename} (${f.reason})`).join(', ');
+                sendError(uploadId, `Falha ao processar arquivos. Detalhes: ${details}`);
+            } else {
+                sendError(uploadId, 'Nenhum arquivo válido foi processado.');
+            }
+            cleanup(req.files);
+            return;
         }
-        cleanup(req.files);
-        return;
-    }
 
-    sendProgress(uploadId, 'Gerando arquivo final...');
+        sendProgress(uploadId, 'Gerando arquivo final...');
 
-    if (processedFiles.length === 1) {
-        // Single file
-        const file = processedFiles[0];
-        const outputFilename = file.filename;
-        const outputPath = path.join(OUTPUT_DIR, outputFilename);
+        if (processedFiles.length === 1) {
+            // Single file
+            const file = processedFiles[0];
+            const outputFilename = file.filename;
+            const outputPath = path.join(OUTPUT_DIR, outputFilename);
 
-        // Move file to output
-        fs.copyFileSync(file.path, outputPath);
+            // Move file to output
+            fs.copyFileSync(file.path, outputPath);
 
-        sendProgress(uploadId, 'Pronto! Iniciando download...');
-        sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
-        cleanup(req.files);
-
-    } else {
-        // Multiple files - ZIP
-        const outputFilename = `arquivos_renomeados_${Date.now()}.zip`;
-        const zipPath = path.join(OUTPUT_DIR, outputFilename);
-        const output = fs.createWriteStream(zipPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        output.on('close', function () {
-            sendProgress(uploadId, 'Compactação concluída.');
+            sendProgress(uploadId, 'Pronto! Iniciando download...');
             sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
             cleanup(req.files);
-        });
 
-        archive.on('error', function (err) {
-            throw err;
-        });
+        } else {
+            // Multiple files - ZIP
+            const outputFilename = `arquivos_renomeados_${Date.now()}.zip`;
+            const zipPath = path.join(OUTPUT_DIR, outputFilename);
+            const output = fs.createWriteStream(zipPath);
+            const archive = archiver('zip', { zlib: { level: 9 } });
 
-        archive.pipe(output);
+            output.on('close', function () {
+                sendProgress(uploadId, 'Compactação concluída.');
+                sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
+                cleanup(req.files);
+            });
 
-        for (const file of processedFiles) {
-            archive.file(file.path, { name: file.filename });
+            archive.on('error', function (err) {
+                throw err;
+            });
+
+            archive.pipe(output);
+
+            for (const file of processedFiles) {
+                archive.file(file.path, { name: file.filename });
+            }
+
+            archive.finalize();
         }
 
-        archive.finalize();
+    } catch (error) {
+        console.error('SERVER ERROR:', error);
+        sendError(uploadId, `Erro interno: ${error.message}`);
+        cleanup(req.files);
     }
-
-} catch (error) {
-    console.error('SERVER ERROR:', error);
-    sendError(uploadId, `Erro interno: ${error.message}`);
-    cleanup(req.files);
-}
 });
 
 function cleanup(files) {

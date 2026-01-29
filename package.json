@@ -13,7 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "archiver": "^7.0.1",
-    "canvas": "^3.2.1",
+    "@napi-rs/canvas": "^0.1.65",
     "express": "^5.2.1",
     "multer": "^2.0.2",
     "pdf-parse": "^1.1.1",
