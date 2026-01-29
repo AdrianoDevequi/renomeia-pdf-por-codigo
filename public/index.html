@@ -144,8 +144,37 @@
                     status.style.color = 'red';
                     eventSource.close();
                     submitBtn.disabled = false;
+                    return;
+                }
+
+                // Handle JSON response (Fallback for Vercel where SSE might fail)
+                const data = await response.json();
+                if (data.success && data.url) {
+                    // Only trigger if SSE hasn't already done it
+                    if (submitBtn.disabled) {
+                        // Success Message (Green)
+                        let finalHtml = '<div style="color: #28a745; font-weight: bold; font-size: 1.1em; margin-bottom: 15px;">Processo finalizado! O download iniciará em breve...</div>';
+
+                        if (data.failedFiles && data.failedFiles.length > 0) {
+                            finalHtml += '<div style="color: #dc3545; font-size: 0.9em; background-color: #fff5f5; padding: 15px; border-radius: 8px; border: 1px solid #ffc9c9; text-align: left;">';
+                            finalHtml += '<strong style="display: block; margin-bottom: 8px;">⚠️ Alguns arquivos não puderam ser renomeados:</strong>';
+                            finalHtml += '<ul style="margin: 0; padding-left: 20px;">';
+                            data.failedFiles.forEach(f => {
+                                finalHtml += `<li style="margin-bottom: 4px;"><strong>${f.filename}</strong>: ${f.reason}</li>`;
+                            });
+                            finalHtml += '</ul></div>';
+                        }
+
+                        status.innerHTML = finalHtml;
+                        status.style.color = '';
+                        window.location.href = data.url;
+
+                        eventSource.close();
+                        submitBtn.disabled = false;
+                    }
                 }
             } catch (err) {
+                console.error('Fetch error:', err);
                 status.textContent = 'Erro de conexão.';
                 status.style.color = 'red';
                 eventSource.close();

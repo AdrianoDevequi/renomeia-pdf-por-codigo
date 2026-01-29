@@ -120,7 +120,7 @@ async function performOCR(pdfPath, uploadId, count, total) {
 
         // Convert only the first page to image to save time/memory
         const pages = await pdfToPng(pdfPath, {
-            viewportScale: 3.0, // Better resolution for noisy scans
+            viewportScale: 1.5, // Faster performance for Vercel
             pagesToProcess: [1]
         });
 
@@ -340,7 +340,8 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             sendProgress(uploadId, 'Pronto! Iniciando download...');
             sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
             cleanup(req.files);
-            res.status(200).json({ success: true, downloadUrl: `/download/${outputFilename}` });
+            // On Vercel, this is the main way to trigger download as SSE is unreliable
+            return res.status(200).json({ success: true, url: `/download/${outputFilename}`, failedFiles });
 
         } else {
             // Multiple files - ZIP
@@ -366,7 +367,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             archive.finalize();
 
             await zipPromise;
-            res.status(200).json({ success: true, downloadUrl: `/download/${outputFilename}` });
+            return res.status(200).json({ success: true, url: `/download/${outputFilename}`, failedFiles });
         }
 
     } catch (error) {
