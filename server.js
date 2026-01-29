@@ -120,7 +120,7 @@ async function performOCR(pdfPath, uploadId, count, total) {
 
         // Convert only the first page to image to save time/memory
         const pages = await pdfToPng(pdfPath, {
-            viewportScale: 2.0, // Good resolution for OCR
+            viewportScale: 3.0, // Better resolution for noisy scans
             pagesToProcess: [1]
         });
 
@@ -149,38 +149,73 @@ async function performOCR(pdfPath, uploadId, count, total) {
 }
 
 
+// Helper to validate and normalize a 13-char candidate
+function validateAndNormalizeCode(segment) {
+    if (!segment || segment.length < 13) return null;
+
+    // Ensure we take exactly 13 chars
+    const sub = segment.substring(0, 13);
+    const prefix = sub.substring(0, 2);
+    const middle = sub.substring(2, 11);
+    const suffix = sub.substring(11, 13);
+
+    // Prefix and Suffix must be letters
+    if (!/^[A-Z]{2}$/.test(prefix) || !/^[A-Z]{2}$/.test(suffix)) return null;
+
+    // Middle must be digits (with fuzzy correction)
+    const digits = middle
+        .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
+        .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
+
+    if (/^\d{9}$/.test(digits)) {
+        return `${prefix}${digits}${suffix}`;
+    }
+    return null;
+}
+
 // Robust search for tracking code in any text
 function findTrackingCode(text) {
     if (!text) return null;
 
-    // Clean text: remove all whitespace AND punctuation, normalize to uppercase
+    // 1. Context Search: Prioritize codes near keywords (Highest Priority)
+    const contextRegex = /(?:OBJETO|RASTREAMENTO|CORREIOS)\s*[:\-]?\s*([A-Z0-9\s\.]{13,25})/gi;
+    let contextMatch;
+    while ((contextMatch = contextRegex.exec(text)) !== null) {
+        const raw = contextMatch[1].replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const code = validateAndNormalizeCode(raw);
+        if (code) {
+            console.log(`[MATCH] Prioridade Máxima (Contexto): ${code}`);
+            return code;
+        }
+    }
+
+    // 2. Scan whole text for candidates with ranking system
     const cleaned = text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    console.log(`[DEBUG] Texto ultra-limpo (${cleaned.length} chars): ${cleaned.substring(0, 40)}...`);
+    const candidates = [];
 
-    // Strategy 1: Perfect match (2 letters + 9 digits + 2 letters)
-    const m1 = cleaned.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
-    if (m1) return m1[0];
-
-    // Strategy 2: Fuzzy match (handle O=0, S=5, etc.) sliding window
     for (let i = 0; i <= cleaned.length - 13; i++) {
         const segment = cleaned.substring(i, i + 13);
-        const prefix = segment.substring(0, 2);
-        const middle = segment.substring(2, 11);
-        const suffix = segment.substring(11, 13);
+        const code = validateAndNormalizeCode(segment);
+        if (code) {
+            let score = 0;
+            // Major boost for Brazilian local codes
+            if (code.endsWith('BR')) score += 100;
 
-        // Check if prefix and suffix are letters
-        if (/^[A-Z]{2}$/.test(prefix) && /^[A-Z]{2}$/.test(suffix)) {
-            // Convert fuzzy digits
-            const digits = middle
-                .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
-                .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
+            // Penalty for "barcode noise" (strings like LI111111111LL)
+            const middleDigits = code.substring(2, 11);
+            const uniqueChars = new Set(middleDigits).size;
+            if (uniqueChars <= 3) score -= 40; // Likely garbage if too few unique digits
+            if (code.includes('111111')) score -= 20;
 
-            if (/^\d{9}$/.test(digits)) {
-                const found = `${prefix}${digits}${suffix}`;
-                console.log(`[MATCH] Encontrado via fuzzy window: ${found}`);
-                return found;
-            }
+            candidates.push({ code, score });
         }
+    }
+
+    if (candidates.length > 0) {
+        // Sort by score descending
+        candidates.sort((a, b) => b.score - a.score);
+        console.log(`[DEBUG] Melhor candidato: ${candidates[0].code} (Score: ${candidates[0].score})`);
+        return candidates[0].code;
     }
 
     return null;
