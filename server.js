@@ -238,9 +238,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
         return res.status(400).send('Nenhum arquivo enviado.');
     }
 
-    // Respond immediately so browser knows upload is done sending
-    res.status(200).send('Upload received, processing...');
-
+    // Do NOT respond immediately on Vercel, must wait for processing to finish
     console.log(`[${uploadId}] Recebidos ${req.files.length} arquivos.`);
     sendProgress(uploadId, `Iniciando processamento de ${req.files.length} arquivos...`);
 
@@ -342,6 +340,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             sendProgress(uploadId, 'Pronto! Iniciando download...');
             sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
             cleanup(req.files);
+            res.status(200).json({ success: true, downloadUrl: `/download/${outputFilename}` });
 
         } else {
             // Multiple files - ZIP
@@ -350,29 +349,33 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             const output = fs.createWriteStream(zipPath);
             const archive = archiver('zip', { zlib: { level: 9 } });
 
-            output.on('close', function () {
-                sendProgress(uploadId, 'Compactação concluída.');
-                sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
-                cleanup(req.files);
-            });
-
-            archive.on('error', function (err) {
-                throw err;
+            const zipPromise = new Promise((resolve, reject) => {
+                output.on('close', function () {
+                    sendProgress(uploadId, 'Compactação concluída.');
+                    sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
+                    cleanup(req.files);
+                    resolve();
+                });
+                archive.on('error', reject);
             });
 
             archive.pipe(output);
-
             for (const file of processedFiles) {
                 archive.file(file.path, { name: file.filename });
             }
-
             archive.finalize();
+
+            await zipPromise;
+            res.status(200).json({ success: true, downloadUrl: `/download/${outputFilename}` });
         }
 
     } catch (error) {
         console.error('SERVER ERROR:', error);
         sendError(uploadId, `Erro interno: ${error.message}`);
         cleanup(req.files);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        }
     }
 });
 
