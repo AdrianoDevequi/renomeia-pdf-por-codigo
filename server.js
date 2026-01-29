@@ -132,10 +132,7 @@ async function performOCR(pdfPath, uploadId, count, total) {
         // Tesseract processes the image buffer
         const { data: { text } } = await Tesseract.recognize(
             Buffer.from(pages[0].content),
-            'por', // Portuguese
-            {
-                // logger: m => console.log(m) 
-            }
+            'por'
         );
 
         console.log(`[OCR] Texto extraído (${text.length} chars)`);
@@ -191,9 +188,11 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             const isScanned = cleanText.length < 10;
 
             // Define Regex strategies
-            const regexContext = /(?:OBJETO)?\s*\(RASTREAMENTO\)\s*:\s*(?:Correios\s*)?([A-Z]{2}\s*\d{9}\s*[A-Z]{2})/i;
-            const regexFallback = /([A-Z]{2})\s*(\d{9})\s*([A-Z]{2})/i;
-            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl]{9})\s*([A-Z]{2})/i;
+            // Improved Regex: Allows whitespace between letters and digits
+            // Tracking code is [2 chars] [9 digits] [2 chars]
+            const regexContext = /(?:OBJETO)?\s*\(RASTREAMENTO\)\s*:\s*(?:Correios\s*)?([A-Z]{2}\s*(?:\d\s*){9}[A-Z]{2})/i;
+            const regexFallback = /([A-Z]{2})\s*((?:\d\s*){9})\s*([A-Z]{2})/i;
+            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl\s]{9,15})\s*([A-Z]{2})/i;
 
             let match = fullText.match(regexContext);
             let code = null;
@@ -207,7 +206,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             if (!code) {
                 const matchFallback = fullText.match(regexFallback);
                 if (matchFallback) {
-                    code = `${matchFallback[1]}${matchFallback[2]}${matchFallback[3]}`.toUpperCase();
+                    code = `${matchFallback[1]}${matchFallback[2].replace(/\s+/g, '')}${matchFallback[3]}`.toUpperCase();
                     sendProgress(uploadId, `(${count}/${req.files.length}) ℹ️ Código detectado (Fallback): ${code}`);
                     console.log(`[MATCH] Fallback encontrou: ${code}`);
                 }
@@ -229,7 +228,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                     if (!code) {
                         const matchFallback = fullText.match(regexFallback);
                         if (matchFallback) {
-                            code = `${matchFallback[1]}${matchFallback[2]}${matchFallback[3]}`.toUpperCase();
+                            code = `${matchFallback[1]}${matchFallback[2].replace(/\s+/g, '')}${matchFallback[3]}`.toUpperCase();
                             console.log(`[MATCH-OCR] Fallback encontrou: ${code}`);
                         }
                     }
@@ -240,6 +239,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                             const prefix = matchFuzzy[1].toUpperCase();
                             const suffix = matchFuzzy[3].toUpperCase();
                             let cleanDigits = matchFuzzy[2].toUpperCase()
+                                .replace(/\s+/g, '')
                                 .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
                                 .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
 
@@ -263,6 +263,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
 
                     // Normalize digits
                     const cleanDigits = rawDigits
+                        .replace(/\s+/g, '') // Remove spaces
                         .replace(/O/g, '0')
                         .replace(/S/g, '5')
                         .replace(/Z/g, '2')
