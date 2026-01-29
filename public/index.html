@@ -139,16 +139,21 @@
                     body: formData
                 });
 
+                let data;
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    console.error('JSON Parse Error:', e);
+                    // If response is not JSON, it might be a raw text error or a network issue
+                }
+
                 if (!response.ok) {
-                    status.textContent = 'Erro no envio dos arquivos.';
-                    status.style.color = 'red';
+                    const errorMsg = (data && data.error) ? data.error : 'Erro no processamento do servidor.';
+                    status.innerHTML = `<span style="color: #dc3545;">❌ ${errorMsg}</span>`;
                     eventSource.close();
                     submitBtn.disabled = false;
                     return;
                 }
-
-                // Handle JSON response (Fallback for Vercel where SSE might fail)
-                const data = await response.json();
                 if (data.success && data.url) {
                     // Only trigger if SSE hasn't already done it
                     if (submitBtn.disabled) {

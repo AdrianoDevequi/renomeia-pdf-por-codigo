@@ -4,8 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 const pdf = require('pdf-parse');
-const Tesseract = require('tesseract.js');
-const { pdfToPng } = require('pdf-to-png-converter');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+require('dotenv').config();
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 
 const app = express();
 
@@ -113,38 +116,40 @@ function sendError(id, message) {
     }
 }
 
-async function performOCR(pdfPath, uploadId, count, total) {
+async function extractCodeWithGemini(filePath, mimeType = 'application/pdf') {
     try {
-        console.log(`[OCR] Iniciando OCR para: ${pdfPath}`);
-        sendProgress(uploadId, `(${count}/${total}) 🔍 OCR necessário (imagem detectada). Processando...`);
+        console.log(`[GEMINI] Iniciando análise IA para: ${filePath}`);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-        // Convert only the first page to image to save time/memory
-        const pages = await pdfToPng(pdfPath, {
-            viewportScale: 1.5, // Faster performance for Vercel
-            pagesToProcess: [1]
-        });
+        const fileBuffer = fs.readFileSync(filePath);
+        const filePart = {
+            inlineData: {
+                data: fileBuffer.toString('base64'),
+                mimeType: mimeType
+            },
+        };
 
-        if (pages.length === 0 || !pages[0].content) {
-            console.log('[OCR] Nenhuma imagem gerada do PDF');
-            return '';
+        const prompt = "Extract the tracking code from this logistics document. The code MUST follow the format: 2 letters, 9 digits, 2 letters (e.g., AB123456789BR). The code usually appears under 'OBJETO' or 'RASTREAMENTO'. If found, return ONLY the 13-character code. If multiple are found, prioritize the one ending in 'BR'. If not found, return 'null'.";
+
+        const result = await model.generateContent([prompt, filePart]);
+        const response = await result.response;
+        const text = response.text().trim().replace(/['"`]/g, ''); // Clean quotes
+
+        console.log(`[GEMINI] Resposta da IA: ${text}`);
+
+        const upperText = text.toUpperCase();
+
+        // Basic validation of the AI response
+        if (upperText.length >= 13 && upperText.includes('BR')) {
+            // Extract just the code if the AI was chatty
+            const match = upperText.match(/[A-Z]{2}\d{9}BR/);
+            return match ? match[0] : null;
         }
 
-        // Tesseract processes the image buffer
-        // Note: cachePath is important for Vercel as root is read-only
-        const { data: { text } } = await Tesseract.recognize(
-            Buffer.from(pages[0].content),
-            'por',
-            {
-                cachePath: '/tmp/tesseract-cache',
-                gzip: false // Faster on some environments
-            }
-        );
-
-        console.log(`[OCR] Texto extraído (${text.length} chars)`);
-        return text;
+        return null;
     } catch (err) {
-        console.error('[OCR ERROR]', err);
-        return '';
+        console.error('[GEMINI ERROR]', err);
+        return null;
     }
 }
 
@@ -273,10 +278,9 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             let code = findTrackingCode(fullText);
 
             if (!code) {
-                const ocrText = await performOCR(file.path, uploadId, count, req.files.length);
-                if (ocrText) {
-                    code = findTrackingCode(ocrText);
-                }
+                sendProgress(uploadId, `(${count}/${req.files.length}) 🧠 Usando IA (Gemini) para leitura avançada...`);
+                // Fallback to Gemini
+                code = await extractCodeWithGemini(file.path);
             }
 
             let filename = file.originalname;
