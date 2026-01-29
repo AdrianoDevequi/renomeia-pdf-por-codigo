@@ -15,11 +15,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@napi-rs/canvas": "^0.1.89",
     "archiver": "^7.0.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "multer": "^2.0.2",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "pdf-to-png-converter": "^3.11.0",
+    "tesseract.js": "^7.0.0"
   }
 }

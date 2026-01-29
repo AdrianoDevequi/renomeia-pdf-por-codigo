@@ -4,11 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 const pdf = require('pdf-parse');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-require('dotenv').config();
-
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const Tesseract = require('tesseract.js');
+const { pdfToPng } = require('pdf-to-png-converter');
 
 const app = express();
 
@@ -116,40 +113,53 @@ function sendError(id, message) {
     }
 }
 
-async function extractCodeWithGemini(filePath, mimeType = 'application/pdf') {
+async function performOCR(pdfPath, uploadId, count, total) {
     try {
-        console.log(`[GEMINI] Iniciando análise IA para: ${filePath}`);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        console.log(`[OCR] Iniciando OCR para: ${pdfPath}`);
+        sendProgress(uploadId, `(${count}/${total}) 🔍 OCR necessário (imagem detectada)...`);
 
-        const fileBuffer = fs.readFileSync(filePath);
-        const filePart = {
-            inlineData: {
-                data: fileBuffer.toString('base64'),
-                mimeType: mimeType
-            },
-        };
+        // Convert only the first page to image to save time/memory
+        // Optimized viewportScale: 1.5 (Balance between speed and accuracy for Vercel 10s timeout)
+        const pages = await pdfToPng(pdfPath, {
+            viewportScale: 1.5,
+            pagesToProcess: [1]
+        });
 
-        const prompt = "Extract the tracking code from this logistics document. The code MUST follow the format: 2 letters, 9 digits, 2 letters (e.g., AB123456789BR). The code usually appears under 'OBJETO' or 'RASTREAMENTO'. If found, return ONLY the 13-character code. If multiple are found, prioritize the one ending in 'BR'. If not found, return 'null'.";
-
-        const result = await model.generateContent([prompt, filePart]);
-        const response = await result.response;
-        const text = response.text().trim().replace(/['"`]/g, ''); // Clean quotes
-
-        console.log(`[GEMINI] Resposta da IA: ${text}`);
-
-        const upperText = text.toUpperCase();
-
-        // Basic validation of the AI response
-        if (upperText.length >= 13 && upperText.includes('BR')) {
-            // Extract just the code if the AI was chatty
-            const match = upperText.match(/[A-Z]{2}\d{9}BR/);
-            return match ? match[0] : null;
+        if (pages.length === 0 || !pages[0].content) {
+            console.log('[OCR] Nenhuma imagem gerada do PDF');
+            return '';
         }
 
-        return null;
+        // Processing Race: 
+        // Vercel Hobby has 10s timeout. We set a 9s internal timeout to abort gracefully.
+        const ocrPromise = Tesseract.recognize(
+            Buffer.from(pages[0].content),
+            'por',
+            {
+                cachePath: '/tmp/tesseract-cache', // Important for Vercel read-only root
+                gzip: false,
+                logger: m => {
+                    // Only log every 20% to avoid spamming logs (good for performance)
+                    if (m.status === 'recognizing text' && Math.round(m.progress * 100) % 20 === 0) {
+                        console.log(`[OCR PROGRESS] ${Math.round(m.progress * 100)}%`);
+                    }
+                }
+            }
+        );
+
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => {
+            console.log('[OCR] Timeout de segurança atingido (9s)');
+            resolve({ data: { text: '' } });
+        }, 9000));
+
+        const result = await Promise.race([ocrPromise, timeoutPromise]);
+
+        console.log(`[OCR] Texto extraído (${result.data.text.length} chars)`);
+        return result.data.text;
+
     } catch (err) {
-        console.error('[GEMINI ERROR]', err);
-        return null;
+        console.error('[OCR ERROR]', err);
+        return '';
     }
 }
 
@@ -278,9 +288,11 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             let code = findTrackingCode(fullText);
 
             if (!code) {
-                sendProgress(uploadId, `(${count}/${req.files.length}) 🧠 Usando IA (Gemini) para leitura avançada...`);
-                // Fallback to Gemini
-                code = await extractCodeWithGemini(file.path);
+                // Fallback to Optimized OCR
+                const ocrText = await performOCR(file.path, uploadId, count, req.files.length);
+                if (ocrText) {
+                    code = findTrackingCode(ocrText);
+                }
             }
 
             let filename = file.originalname;
