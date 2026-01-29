@@ -130,9 +130,14 @@ async function performOCR(pdfPath, uploadId, count, total) {
         }
 
         // Tesseract processes the image buffer
+        // Note: cachePath is important for Vercel as root is read-only
         const { data: { text } } = await Tesseract.recognize(
             Buffer.from(pages[0].content),
-            'por'
+            'por',
+            {
+                cachePath: '/tmp/tesseract-cache',
+                gzip: false // Faster on some environments
+            }
         );
 
         console.log(`[OCR] Texto extraído (${text.length} chars)`);
@@ -220,6 +225,16 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 }
             }
 
+            // MegaClean strategy: Remove ALL whitespace and search
+            if (!code) {
+                const megaClean = fullText.replace(/\s+/g, '').toUpperCase();
+                const megaMatch = megaClean.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
+                if (megaMatch) {
+                    code = megaMatch[0];
+                    console.log(`[MATCH] MegaClean encontrou: ${code}`);
+                }
+            }
+
             // If normal extraction failed, try OCR
             if (!code) {
                 const ocrText = await performOCR(file.path, uploadId, count, req.files.length);
@@ -259,10 +274,11 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                     }
 
                     if (!code) {
-                        const matchLoose = fullText.match(regexLoose);
-                        if (matchLoose) {
-                            code = (matchLoose[1] + matchLoose[2] + matchLoose[3]).replace(/\s+/g, '').toUpperCase();
-                            console.log(`[MATCH-OCR] Loose encontrou: ${code}`);
+                        const megaClean = fullText.replace(/\s+/g, '').toUpperCase();
+                        const megaMatch = megaClean.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
+                        if (megaMatch) {
+                            code = megaMatch[0];
+                            console.log(`[MATCH-OCR] MegaClean encontrou: ${code}`);
                         }
                     }
                 }
