@@ -148,6 +148,39 @@ async function performOCR(pdfPath, uploadId, count, total) {
     }
 }
 
+
+// Robust search for tracking code in any text
+function findTrackingCode(text) {
+    if (!text) return null;
+
+    // Clean text: remove all whitespace and normalize to uppercase
+    const cleaned = text.replace(/\s+/g, '').toUpperCase();
+
+    // Strategy 1: Perfect match (2 letters + 9 digits + 2 letters)
+    const m1 = cleaned.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
+    if (m1) return m1[0];
+
+    // Strategy 2: Fuzzy match (handle O=0, S=5, etc.) anywhere in the string
+    for (let i = 0; i <= cleaned.length - 13; i++) {
+        const segment = cleaned.substring(i, i + 13);
+        const prefix = segment.substring(0, 2);
+        const middle = segment.substring(2, 11);
+        const suffix = segment.substring(11, 13);
+
+        if (/^[A-Z]{2}$/.test(prefix) && /^[A-Z]{2}$/.test(suffix)) {
+            const digits = middle
+                .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
+                .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
+
+            if (/^\d{9}$/.test(digits)) {
+                return `${prefix}${digits}${suffix}`;
+            }
+        }
+    }
+
+    return null;
+}
+
 app.post('/upload', upload.array('pdfs'), async (req, res) => {
     const uploadId = req.query.id;
 
@@ -188,135 +221,21 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
 
             console.log(`[DEBUG] Texto extraído: ${fullText.length} caracteres.`);
 
-            // Clean text check
-            const cleanText = fullText.replace(/\s+/g, '').trim();
-            const isScanned = cleanText.length < 10;
+            // Strategy: Find in text, then fallback to OCR
+            let code = findTrackingCode(fullText);
 
-            // Define Regex strategies
-            // Improved Regex: Allows whitespace between letters and digits
-            // Tracking code is [2 chars] [9 digits] [2 chars]
-            const regexContext = /(?:OBJETO)?\s*\(RASTREAMENTO\)\s*:\s*(?:Correios\s*)?([A-Z]{2}\s*(?:\d\s*){9}[A-Z]{2})/i;
-            const regexFallback = /([A-Z]{2})\s*((?:\d\s*){9})\s*([A-Z]{2})/i;
-            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl\s]{9,18})\s*([A-Z]{2})/i;
-            const regexLoose = /([A-Z]\s*[A-Z])\s*((?:\d\s*){9,15})\s*([A-Z]\s*[A-Z])/i;
-
-            let match = fullText.match(regexContext);
-            let code = null;
-
-            if (match && match[1]) {
-                code = match[1].replace(/\s+/g, '').toUpperCase();
-                console.log(`[MATCH] Contexto estrito encontrou: ${code}`);
-            }
-
-            // If the strict context match failed, try the fallback (search anywhere)
-            if (!code) {
-                const matchFallback = fullText.match(regexFallback);
-                if (matchFallback) {
-                    code = `${matchFallback[1]}${matchFallback[2].replace(/\s+/g, '')}${matchFallback[3]}`.toUpperCase();
-                    sendProgress(uploadId, `(${count}/${req.files.length}) ℹ️ Código detectado (Fallback): ${code}`);
-                    console.log(`[MATCH] Fallback encontrou: ${code}`);
-                }
-                if (!code) {
-                    const matchLoose = fullText.match(regexLoose);
-                    if (matchLoose) {
-                        code = (matchLoose[1] + matchLoose[2] + matchLoose[3]).replace(/\s+/g, '').toUpperCase();
-                        console.log(`[MATCH] Loose encontrou: ${code}`);
-                    }
-                }
-            }
-
-            // MegaClean strategy: Remove ALL whitespace and search
-            if (!code) {
-                const megaClean = fullText.replace(/\s+/g, '').toUpperCase();
-                const megaMatch = megaClean.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
-                if (megaMatch) {
-                    code = megaMatch[0];
-                    console.log(`[MATCH] MegaClean encontrou: ${code}`);
-                }
-            }
-
-            // If normal extraction failed, try OCR
             if (!code) {
                 const ocrText = await performOCR(file.path, uploadId, count, req.files.length);
-                if (ocrText && ocrText.length > 10) {
-                    fullText = ocrText;
-
-                    // Re-run the regex checks on OCR text
-                    match = fullText.match(regexContext);
-                    if (match && match[1]) {
-                        code = match[1].replace(/\s+/g, '').toUpperCase();
-                        console.log(`[MATCH-OCR] Contexto estrito encontrou: ${code}`);
-                    }
-
-                    if (!code) {
-                        const matchFallback = fullText.match(regexFallback);
-                        if (matchFallback) {
-                            code = `${matchFallback[1]}${matchFallback[2].replace(/\s+/g, '')}${matchFallback[3]}`.toUpperCase();
-                            console.log(`[MATCH-OCR] Fallback encontrou: ${code}`);
-                        }
-                    }
-
-                    if (!code) {
-                        const matchFuzzy = fullText.match(regexFuzzy);
-                        if (matchFuzzy) {
-                            const prefix = matchFuzzy[1].toUpperCase();
-                            const suffix = matchFuzzy[3].toUpperCase();
-                            let cleanDigits = matchFuzzy[2].toUpperCase()
-                                .replace(/\s+/g, '')
-                                .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
-                                .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
-
-                            if (/^\d{9}$/.test(cleanDigits)) {
-                                code = `${prefix}${cleanDigits}${suffix}`;
-                                console.log(`[MATCH-OCR] Fuzzy encontrou: ${code}`);
-                            }
-                        }
-                    }
-
-                    if (!code) {
-                        const megaClean = fullText.replace(/\s+/g, '').toUpperCase();
-                        const megaMatch = megaClean.match(/[A-Z]{2}\d{9}[A-Z]{2}/);
-                        if (megaMatch) {
-                            code = megaMatch[0];
-                            console.log(`[MATCH-OCR] MegaClean encontrou: ${code}`);
-                        }
-                    }
-                }
-            }
-
-            // Strategy 3: Fuzzy Match (Handle common typos even in digital text: S=5, O=0, etc.)
-            if (!code) {
-                const matchFuzzy = fullText.match(regexFuzzy);
-
-                if (matchFuzzy) {
-                    const prefix = matchFuzzy[1].toUpperCase();
-                    const suffix = matchFuzzy[3].toUpperCase();
-                    let rawDigits = matchFuzzy[2].toUpperCase();
-
-                    // Normalize digits
-                    const cleanDigits = rawDigits
-                        .replace(/\s+/g, '') // Remove spaces
-                        .replace(/O/g, '0')
-                        .replace(/S/g, '5')
-                        .replace(/Z/g, '2')
-                        .replace(/I/g, '1')
-                        .replace(/L/g, '1')
-                        .replace(/B/g, '8')
-                        .replace(/G/g, '6');
-
-                    if (/^\d{9}$/.test(cleanDigits)) {
-                        code = `${prefix}${cleanDigits}${suffix}`;
-                        sendProgress(uploadId, `(${count}/${req.files.length}) 🔧 Código corrigido (Fuzzy): ${code}`);
-                    }
+                if (ocrText) {
+                    code = findTrackingCode(ocrText);
                 }
             }
 
             let filename = file.originalname;
             if (code) {
                 filename = `${code}.pdf`;
-                if (match) sendProgress(uploadId, `(${count}/${req.files.length}) Código encontrado: ${code}`);
+                sendProgress(uploadId, `(${count}/${req.files.length}) ✅ Encontrado: ${code}`);
 
-                // Handle Duplicate Filenames
                 let finalFilename = filename;
                 let dupCounter = 1;
                 while (processedFiles.some(f => f.filename === finalFilename)) {
@@ -332,86 +251,80 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 });
 
             } else {
-                let reason = 'Código não encontrado';
-                if (isScanned) {
-                    reason = `IMAGEM ou Texto ilegível (Extracted: ${fullText.length} chars)`;
-                    sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: ${reason}`);
-                } else {
-                    reason = `Código não encontrado (Texto: ${fullText.length} chars)`;
-                    sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: ${reason}`);
-                }
+                const isScanned = fullText.replace(/\s+/g, '').length < 10;
+                let reason = isScanned ? 'Imagem ou texto ilegível' : 'Código não identificado';
+                sendProgress(uploadId, `(${count}/${req.files.length}) ❌ ERRO: ${reason}`);
 
                 failedFiles.push({
                     filename: file.originalname,
-                    reason: reason
+                    reason: `${reason} (Texto: ${fullText.length} chars)`
                 });
 
-                // Delete failed file immediately
-                if (fs.existsSync(file.path)) {
-                    fs.unlinkSync(file.path);
-                }
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
             }
         }
+    }
 
-        if (processedFiles.length === 0) {
-            // Even if 0 processed, send error but with list of failures if available
-            if (failedFiles.length > 0) {
-                // Return detailed reasons in the error message
-                const details = failedFiles.map(f => `${f.filename} (${f.reason})`).join(', ');
-                sendError(uploadId, `Falha ao processar arquivos. Detalhes: ${details}`);
-            } else {
-                sendError(uploadId, 'Nenhum arquivo válido foi processado.');
-            }
-            cleanup(req.files);
-            return;
+
+if (processedFiles.length === 0) {
+        // Even if 0 processed, send error but with list of failures if available
+        if (failedFiles.length > 0) {
+            // Return detailed reasons in the error message
+            const details = failedFiles.map(f => `${f.filename} (${f.reason})`).join(', ');
+            sendError(uploadId, `Falha ao processar arquivos. Detalhes: ${details}`);
+        } else {
+            sendError(uploadId, 'Nenhum arquivo válido foi processado.');
         }
+        cleanup(req.files);
+        return;
+    }
 
-        sendProgress(uploadId, 'Gerando arquivo final...');
+    sendProgress(uploadId, 'Gerando arquivo final...');
 
-        if (processedFiles.length === 1) {
-            // Single file
-            const file = processedFiles[0];
-            const outputFilename = file.filename;
-            const outputPath = path.join(OUTPUT_DIR, outputFilename);
+    if (processedFiles.length === 1) {
+        // Single file
+        const file = processedFiles[0];
+        const outputFilename = file.filename;
+        const outputPath = path.join(OUTPUT_DIR, outputFilename);
 
-            // Move file to output
-            fs.copyFileSync(file.path, outputPath);
+        // Move file to output
+        fs.copyFileSync(file.path, outputPath);
 
-            sendProgress(uploadId, 'Pronto! Iniciando download...');
+        sendProgress(uploadId, 'Pronto! Iniciando download...');
+        sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
+        cleanup(req.files);
+
+    } else {
+        // Multiple files - ZIP
+        const outputFilename = `arquivos_renomeados_${Date.now()}.zip`;
+        const zipPath = path.join(OUTPUT_DIR, outputFilename);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', function () {
+            sendProgress(uploadId, 'Compactação concluída.');
             sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
             cleanup(req.files);
+        });
 
-        } else {
-            // Multiple files - ZIP
-            const outputFilename = `arquivos_renomeados_${Date.now()}.zip`;
-            const zipPath = path.join(OUTPUT_DIR, outputFilename);
-            const output = fs.createWriteStream(zipPath);
-            const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.on('error', function (err) {
+            throw err;
+        });
 
-            output.on('close', function () {
-                sendProgress(uploadId, 'Compactação concluída.');
-                sendComplete(uploadId, `/download/${outputFilename}`, failedFiles);
-                cleanup(req.files);
-            });
+        archive.pipe(output);
 
-            archive.on('error', function (err) {
-                throw err;
-            });
-
-            archive.pipe(output);
-
-            for (const file of processedFiles) {
-                archive.file(file.path, { name: file.filename });
-            }
-
-            archive.finalize();
+        for (const file of processedFiles) {
+            archive.file(file.path, { name: file.filename });
         }
 
-    } catch (error) {
-        console.error('SERVER ERROR:', error);
-        sendError(uploadId, `Erro interno: ${error.message}`);
-        cleanup(req.files);
+        archive.finalize();
     }
+
+} catch (error) {
+    console.error('SERVER ERROR:', error);
+    sendError(uploadId, `Erro interno: ${error.message}`);
+    cleanup(req.files);
+}
 });
 
 function cleanup(files) {
