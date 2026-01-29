@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 const pdf = require('pdf-parse');
+const Tesseract = require('tesseract.js');
+const { pdfToPng } = require('pdf-to-png-converter');
 
 const app = express();
 
@@ -111,6 +113,39 @@ function sendError(id, message) {
     }
 }
 
+async function performOCR(pdfPath, uploadId, count, total) {
+    try {
+        console.log(`[OCR] Iniciando OCR para: ${pdfPath}`);
+        sendProgress(uploadId, `(${count}/${total}) 🔍 OCR necessário (imagem detectada). Processando...`);
+
+        // Convert only the first page to image to save time/memory
+        const pages = await pdfToPng(pdfPath, {
+            viewportScale: 2.0, // Good resolution for OCR
+            pagesToProcess: [1]
+        });
+
+        if (pages.length === 0 || !pages[0].content) {
+            console.log('[OCR] Nenhuma imagem gerada do PDF');
+            return '';
+        }
+
+        // Tesseract processes the image buffer
+        const { data: { text } } = await Tesseract.recognize(
+            Buffer.from(pages[0].content),
+            'por', // Portuguese
+            {
+                // logger: m => console.log(m) 
+            }
+        );
+
+        console.log(`[OCR] Texto extraído (${text.length} chars)`);
+        return text;
+    } catch (err) {
+        console.error('[OCR ERROR]', err);
+        return '';
+    }
+}
+
 app.post('/upload', upload.array('pdfs'), async (req, res) => {
     const uploadId = req.query.id;
 
@@ -155,10 +190,11 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
             const cleanText = fullText.replace(/\s+/g, '').trim();
             const isScanned = cleanText.length < 10;
 
-            // Regex 1: Context-aware
-            // Modified to be less greedy and handle newlines/words like "Correios"
-            // Looks for (RASTREAMENTO) ... then explicitly looks for the code pattern
+            // Define Regex strategies
             const regexContext = /(?:OBJETO)?\s*\(RASTREAMENTO\)\s*:\s*(?:Correios\s*)?([A-Z]{2}\s*\d{9}\s*[A-Z]{2})/i;
+            const regexFallback = /([A-Z]{2})\s*(\d{9})\s*([A-Z]{2})/i;
+            const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl]{9})\s*([A-Z]{2})/i;
+
             let match = fullText.match(regexContext);
             let code = null;
 
@@ -169,8 +205,6 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
 
             // If the strict context match failed, try the fallback (search anywhere)
             if (!code) {
-                // Regex 2: Fallback - Permissive
-                const regexFallback = /([A-Z]{2})\s*(\d{9})\s*([A-Z]{2})/i;
                 const matchFallback = fullText.match(regexFallback);
                 if (matchFallback) {
                     code = `${matchFallback[1]}${matchFallback[2]}${matchFallback[3]}`.toUpperCase();
@@ -179,10 +213,47 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 }
             }
 
+            // If normal extraction failed, try OCR
+            if (!code) {
+                const ocrText = await performOCR(file.path, uploadId, count, req.files.length);
+                if (ocrText && ocrText.length > 10) {
+                    fullText = ocrText;
+
+                    // Re-run the regex checks on OCR text
+                    match = fullText.match(regexContext);
+                    if (match && match[1]) {
+                        code = match[1].replace(/\s+/g, '').toUpperCase();
+                        console.log(`[MATCH-OCR] Contexto estrito encontrou: ${code}`);
+                    }
+
+                    if (!code) {
+                        const matchFallback = fullText.match(regexFallback);
+                        if (matchFallback) {
+                            code = `${matchFallback[1]}${matchFallback[2]}${matchFallback[3]}`.toUpperCase();
+                            console.log(`[MATCH-OCR] Fallback encontrou: ${code}`);
+                        }
+                    }
+
+                    if (!code) {
+                        const matchFuzzy = fullText.match(regexFuzzy);
+                        if (matchFuzzy) {
+                            const prefix = matchFuzzy[1].toUpperCase();
+                            const suffix = matchFuzzy[3].toUpperCase();
+                            let cleanDigits = matchFuzzy[2].toUpperCase()
+                                .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
+                                .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
+
+                            if (/^\d{9}$/.test(cleanDigits)) {
+                                code = `${prefix}${cleanDigits}${suffix}`;
+                                console.log(`[MATCH-OCR] Fuzzy encontrou: ${code}`);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Strategy 3: Fuzzy Match (Handle common typos even in digital text: S=5, O=0, etc.)
             if (!code) {
-                // Looks for: 2 letters, 9 chars (digits or lookalikes), 2 letters
-                const regexFuzzy = /([A-Z]{2})\s*([0-9OSZBIgl]{9})\s*([A-Z]{2})/i;
                 const matchFuzzy = fullText.match(regexFuzzy);
 
                 if (matchFuzzy) {
