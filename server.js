@@ -323,7 +323,7 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
                 sendError(uploadId, 'Nenhum arquivo válido foi processado.');
             }
             cleanup(req.files);
-            return;
+            return res.status(400).json({ error: 'Nenhum arquivo válido foi processado.', details: failedFiles });
         }
 
         sendProgress(uploadId, 'Gerando arquivo final...');
