@@ -7,7 +7,7 @@
     <title>Renomear PDF por Rastreamento</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <!-- Add JSZip for client-side zipping ->
+    <!-- Add JSZip for client-side zipping -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
@@ -16,7 +16,8 @@
     <div class="container">
         <header>
             <h1>Renomeador de PDF (Cliente-Side)</h1>
-            <p>Processamento em lote inteligente. Sem limite de arquivos. O servidor apenas lê, seu navegador constrói o ZIP.</p>
+            <p>Processamento em lote inteligente. Sem limite de arquivos. O servidor apenas lê, seu navegador constrói o
+                ZIP.</p>
         </header>
 
         <form id="uploadForm">
@@ -24,10 +25,11 @@
                 <span class="drop-zone__prompt">Arraste seus PDFs aqui ou clique p/ upload</span>
                 <input type="file" name="pdfs" class="drop-zone__input" id="fileInput" multiple accept=".pdf">
             </div>
-            
+
             <div id="progressContainer" style="display:none; margin-top: 20px;">
                 <div style="background: #e9ecef; border-radius: 5px; height: 20px; width: 100%; overflow: hidden;">
-                    <div id="progressBar" style="width: 0%; height: 100%; background: #007bff; transition: width 0.3s;"></div>
+                    <div id="progressBar" style="width: 0%; height: 100%; background: #007bff; transition: width 0.3s;">
+                    </div>
                 </div>
                 <p id="progressText" style="margin-top: 5px; font-size: 0.9em; text-align: center;">Aguardando...</p>
             </div>
@@ -78,7 +80,7 @@
             fileList.innerHTML = '';
             status.innerHTML = ''; // Clear status
             progressContainer.style.display = 'none';
-            
+
             if (input.files.length > 0) {
                 submitBtn.disabled = false;
                 const count = input.files.length;
@@ -99,7 +101,7 @@
             submitBtn.disabled = true;
             progressContainer.style.display = 'block';
             status.innerHTML = '';
-            
+
             const zip = new JSZip();
             const failures = [];
             const files = Array.from(input.files);
@@ -112,7 +114,7 @@
             for (let i = 0; i < total; i++) {
                 const file = files[i];
                 const currentNum = i + 1;
-                
+
                 // Update UI
                 const percent = Math.round((processed / total) * 100);
                 progressBar.style.width = `${percent}%`;
@@ -151,15 +153,15 @@
 
             // Finalizing
             progressText.textContent = 'Gerando arquivo ZIP...';
-            
+
             try {
                 // Generate ZIP if we have files
                 const content = await zip.generateAsync({ type: "blob" });
-                
+
                 // Trigger Download
                 if (Object.keys(zip.files).length > 0) {
                     saveAs(content, `renomeados_${Date.now()}.zip`);
-                    
+
                     let msg = `<div style="color: #28a745; margin-bottom: 10px; font-weight: bold;">✅ Processamento concluído! Download iniciado.</div>`;
                     if (failures.length > 0) {
                         msg += `<div style="background: #fff3f3; border: 1px solid #ffc9c9; padding: 10px; border-radius: 5px; font-size: 0.9em; color: #d32f2f;">`;
@@ -192,4 +194,5 @@
         });
     </script>
 </body>
+
 </html>
