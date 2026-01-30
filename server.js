@@ -68,6 +68,88 @@ async function performOCR(pdfPath, _uploadId, _count, _total) {
         return '';
     }
 }
+// Helper to validate and normalize a 13-char candidate
+function validateAndNormalizeCode(segment) {
+    if (!segment || segment.length < 13) return null;
+
+    // Ensure we take exactly 13 chars
+    const sub = segment.substring(0, 13);
+    const prefix = sub.substring(0, 2);
+    const middle = sub.substring(2, 11);
+    const suffix = sub.substring(11, 13);
+
+    // Prefix and Suffix must be letters
+    if (!/^[A-Z]{2}$/.test(prefix) || !/^[A-Z]{2}$/.test(suffix)) return null;
+
+    // Middle must be digits (with fuzzy correction)
+    const digits = middle
+        .replace(/O/g, '0').replace(/S/g, '5').replace(/Z/g, '2')
+        .replace(/I/g, '1').replace(/L/g, '1').replace(/B/g, '8').replace(/G/g, '6');
+
+    if (/^\d{9}$/.test(digits)) {
+        return `${prefix}${digits}${suffix}`;
+    }
+    return null;
+}
+
+// Robust search for tracking code in any text
+function findTrackingCode(text) {
+    if (!text) return null;
+
+    // 1. Context Search: Prioritize codes near keywords (Highest Priority)
+    // Refined regex to handle (RASTREAMENTO) and other variations
+    const contextRegex = /(?:OBJETO(?:\s*\(RASTREAMENTO\))?|RASTREAMENTO|CORREIOS)\s*[:\-]?\s*([A-Z0-9\s\.]{13,30})/gi;
+    let contextMatch;
+    while ((contextMatch = contextRegex.exec(text)) !== null) {
+        const raw = contextMatch[1].replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        const code = validateAndNormalizeCode(raw);
+
+        // MANDATORY: In this project, correct codes ALWAYS end in BR
+        if (code && code.endsWith('BR')) {
+            console.log(`[MATCH] Prioridade Máxima (Contexto + BR): ${code}`);
+            return code;
+        }
+    }
+
+    // 2. Scan whole text for candidates with ranking system
+    const cleaned = text.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const candidates = [];
+
+    for (let i = 0; i <= cleaned.length - 13; i++) {
+        const segment = cleaned.substring(i, i + 13);
+        const code = validateAndNormalizeCode(segment);
+
+        // Only consider codes that end in BR (as specified by user)
+        if (code && code.endsWith('BR')) {
+            let score = 100; // Base score for BR codes
+
+            // Penalty for "barcode noise" even if it ends in BR by some miracle
+            const middleDigits = code.substring(2, 11);
+            const uniqueChars = new Set(middleDigits).size;
+
+            if (uniqueChars <= 3) score -= 80;
+            if (middleDigits === '111111111' || middleDigits === '000000000') score -= 150;
+            if (code.startsWith('LI')) score -= 50;
+
+            candidates.push({ code, score });
+        }
+    }
+
+    if (candidates.length > 0) {
+        // Sort by score descending
+        candidates.sort((a, b) => b.score - a.score);
+
+        console.log(`[DEBUG] Melhor candidato BR: ${candidates[0].code} (Score: ${candidates[0].score})`);
+
+        // Only return if it's a high-quality match
+        if (candidates[0].score > 0) {
+            return candidates[0].code;
+        }
+    }
+
+    return null;
+}
+
 // PROCESS SINGLE FILE (Client-Side Orchestration Pattern)
 app.post('/process-single', upload.single('pdf'), async (req, res) => {
     try {
