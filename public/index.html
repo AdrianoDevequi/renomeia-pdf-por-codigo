@@ -7,23 +7,33 @@
     <title>Renomear PDF por Rastreamento</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Add JSZip for client-side zipping ->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>Renomeador de PDF</h1>
-            <p>Arraste arquivos ou clique para selecionar. O sistema renomeará baseado no código "OBJETO
-                (RASTREAMENTO)".</p>
+            <h1>Renomeador de PDF (Cliente-Side)</h1>
+            <p>Processamento em lote inteligente. Sem limite de arquivos. O servidor apenas lê, seu navegador constrói o ZIP.</p>
         </header>
 
-        <form id="uploadForm" action="/upload" method="POST" enctype="multipart/form-data">
+        <form id="uploadForm">
             <div class="drop-zone" id="dropZone">
                 <span class="drop-zone__prompt">Arraste seus PDFs aqui ou clique p/ upload</span>
                 <input type="file" name="pdfs" class="drop-zone__input" id="fileInput" multiple accept=".pdf">
             </div>
+            
+            <div id="progressContainer" style="display:none; margin-top: 20px;">
+                <div style="background: #e9ecef; border-radius: 5px; height: 20px; width: 100%; overflow: hidden;">
+                    <div id="progressBar" style="width: 0%; height: 100%; background: #007bff; transition: width 0.3s;"></div>
+                </div>
+                <p id="progressText" style="margin-top: 5px; font-size: 0.9em; text-align: center;">Aguardando...</p>
+            </div>
+
             <div id="fileList" class="file-list"></div>
-            <button type="submit" class="btn" id="submitBtn" disabled>Processar e Baixar</button>
+            <button type="submit" class="btn" id="submitBtn" disabled>Processar e Baixar ZIP</button>
         </form>
 
         <div id="status" class="status"></div>
@@ -36,6 +46,9 @@
         const submitBtn = document.getElementById('submitBtn');
         const form = document.getElementById('uploadForm');
         const status = document.getElementById('status');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
 
         dropZone.addEventListener('click', () => input.click());
 
@@ -63,14 +76,17 @@
 
         function updateFileList() {
             fileList.innerHTML = '';
+            status.innerHTML = ''; // Clear status
+            progressContainer.style.display = 'none';
+            
             if (input.files.length > 0) {
                 submitBtn.disabled = false;
-                Array.from(input.files).forEach(file => {
-                    const div = document.createElement('div');
-                    div.className = 'file-item';
-                    div.textContent = `📄 ${file.name}`;
-                    fileList.appendChild(div);
-                });
+                const count = input.files.length;
+                const div = document.createElement('div');
+                div.style.padding = '10px';
+                div.style.textAlign = 'center';
+                div.innerHTML = `<strong>${count}</strong> arquivo${count > 1 ? 's' : ''} selecionado${count > 1 ? 's' : ''}.`;
+                fileList.appendChild(div);
             } else {
                 submitBtn.disabled = true;
             }
@@ -78,115 +94,102 @@
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (input.files.length === 0) return;
 
-            // Generate unique ID for this upload session
-            const uploadId = Date.now().toString();
-
-            // Setup SSE connection
-            const eventSource = new EventSource(`/events/${uploadId}`);
-
-            status.innerHTML = '<span class="spinner"></span> Iniciando...';
-            status.style.color = '#333';
             submitBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            status.innerHTML = '';
+            
+            const zip = new JSZip();
+            const failures = [];
+            const files = Array.from(input.files);
+            const total = files.length;
+            let processed = 0;
 
-            // Handle progress messages
-            eventSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+            const batchId = Date.now();
+            console.log(`[BATCH] Iniciando processamento de ${total} arquivos.`);
 
-                if (data.type === 'progress') {
-                    status.innerHTML = `<span class="spinner"></span> ${data.message}`;
-                } else if (data.type === 'complete') {
-                    // Success Message (Green)
-                    let finalHtml = '<div style="color: #28a745; font-weight: bold; font-size: 1.1em; margin-bottom: 15px;">Processo finalizado! O download iniciará em breve...</div>';
+            for (let i = 0; i < total; i++) {
+                const file = files[i];
+                const currentNum = i + 1;
+                
+                // Update UI
+                const percent = Math.round((processed / total) * 100);
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `Processando ${currentNum}/${total}: ${file.name}...`;
 
-                    // Error List (Red and Smaller)
-                    if (data.failedFiles && data.failedFiles.length > 0) {
-                        finalHtml += '<div style="color: #dc3545; font-size: 0.9em; background-color: #fff5f5; padding: 15px; border-radius: 8px; border: 1px solid #ffc9c9; text-align: left;">';
-                        finalHtml += '<strong style="display: block; margin-bottom: 8px;">⚠️ Alguns arquivos não puderam ser renomeados:</strong>';
-                        finalHtml += '<ul style="margin: 0; padding-left: 20px;">';
-                        data.failedFiles.forEach(f => {
-                            finalHtml += `<li style="margin-bottom: 4px;"><strong>${f.filename}</strong>: ${f.reason}</li>`;
-                        });
-                        finalHtml += '</ul></div>';
-                    }
-
-                    status.innerHTML = finalHtml;
-                    // Reset status color override
-                    status.style.color = '';
-
-                    // Trigger download
-                    window.location.href = data.url;
-
-                    eventSource.close();
-                    submitBtn.disabled = false;
-                } else if (data.type === 'error') {
-                    status.innerHTML = '<span style="color: #dc3545;">Erro: ' + data.message + '</span>';
-                    eventSource.close();
-                    submitBtn.disabled = false;
-                }
-            };
-
-            eventSource.onerror = (err) => {
-                console.error('EventSource error:', err);
-            };
-
-            const formData = new FormData(form);
-
-            try {
-                // Send files with ID in query string
-                const response = await fetch(`/upload?id=${uploadId}`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                let data;
                 try {
-                    data = await response.json();
-                } catch (e) {
-                    console.error('JSON Parse Error:', e);
-                    // If response is not JSON, it might be a raw text error or a network issue
+                    const formData = new FormData();
+                    formData.append('pdf', file);
+
+                    // Send to server for identification only
+                    const response = await fetch('/process-single', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success && data.newName) {
+                        // Success! Add *original* file content to zip with *new* name
+                        zip.file(data.newName, file);
+                        console.log(`[OK] ${file.name} -> ${data.newName}`);
+                    } else {
+                        // Logic failure (no code found)
+                        console.warn(`[FAIL] ${file.name}: ${data.error}`);
+                        failures.push({ name: file.name, reason: data.error || 'Não identificado' });
+                    }
+
+                } catch (err) {
+                    console.error(`[ERROR] ${file.name}:`, err);
+                    failures.push({ name: file.name, reason: 'Erro de rede ou servidor' });
                 }
 
-                if (!response.ok) {
-                    const errorMsg = (data && data.error) ? data.error : 'Erro no processamento do servidor.';
-                    status.innerHTML = `<span style="color: #dc3545;">❌ ${errorMsg}</span>`;
-                    eventSource.close();
-                    submitBtn.disabled = false;
-                    return;
-                }
-                if (data.success && data.url) {
-                    // Only trigger if SSE hasn't already done it
-                    if (submitBtn.disabled) {
-                        // Success Message (Green)
-                        let finalHtml = '<div style="color: #28a745; font-weight: bold; font-size: 1.1em; margin-bottom: 15px;">Processo finalizado! O download iniciará em breve...</div>';
+                processed++;
+                progressBar.style.width = `${Math.round((processed / total) * 100)}%`;
+            }
 
-                        if (data.failedFiles && data.failedFiles.length > 0) {
-                            finalHtml += '<div style="color: #dc3545; font-size: 0.9em; background-color: #fff5f5; padding: 15px; border-radius: 8px; border: 1px solid #ffc9c9; text-align: left;">';
-                            finalHtml += '<strong style="display: block; margin-bottom: 8px;">⚠️ Alguns arquivos não puderam ser renomeados:</strong>';
-                            finalHtml += '<ul style="margin: 0; padding-left: 20px;">';
-                            data.failedFiles.forEach(f => {
-                                finalHtml += `<li style="margin-bottom: 4px;"><strong>${f.filename}</strong>: ${f.reason}</li>`;
-                            });
-                            finalHtml += '</ul></div>';
-                        }
-
-                        status.innerHTML = finalHtml;
-                        status.style.color = '';
-                        window.location.href = data.url;
-
-                        eventSource.close();
-                        submitBtn.disabled = false;
+            // Finalizing
+            progressText.textContent = 'Gerando arquivo ZIP...';
+            
+            try {
+                // Generate ZIP if we have files
+                const content = await zip.generateAsync({ type: "blob" });
+                
+                // Trigger Download
+                if (Object.keys(zip.files).length > 0) {
+                    saveAs(content, `renomeados_${Date.now()}.zip`);
+                    
+                    let msg = `<div style="color: #28a745; margin-bottom: 10px; font-weight: bold;">✅ Processamento concluído! Download iniciado.</div>`;
+                    if (failures.length > 0) {
+                        msg += `<div style="background: #fff3f3; border: 1px solid #ffc9c9; padding: 10px; border-radius: 5px; font-size: 0.9em; color: #d32f2f;">`;
+                        msg += `<strong>⚠️ ${failures.length} arquivo(s) não puderam ser renomeados:</strong><ul style="margin: 5px 0 0 20px;">`;
+                        failures.forEach(f => {
+                            msg += `<li>${f.name} (${f.reason})</li>`;
+                        });
+                        msg += `</ul></div>`;
+                    }
+                    status.innerHTML = msg;
+                } else {
+                    status.innerHTML = `<div style="color: #d32f2f; font-weight: bold;">❌ Nenhum arquivo pôde ser identificado.</div>`;
+                    if (failures.length > 0) {
+                        let msg = `<div style="margin-top:10px; font-size: 0.9em; text-align: left;">`;
+                        failures.forEach(f => {
+                            msg += `<div>- ${f.name}: ${f.reason}</div>`;
+                        });
+                        msg += `</div>`;
+                        status.innerHTML += msg;
                     }
                 }
-            } catch (err) {
-                console.error('Fetch error:', err);
-                status.textContent = 'Erro de conexão.';
-                status.style.color = 'red';
-                eventSource.close();
-                submitBtn.disabled = false;
+
+            } catch (zipErr) {
+                console.error("ZIP Error:", zipErr);
+                status.innerHTML = '<span style="color: red;">Erro ao gerar o arquivo ZIP.</span>';
             }
+
+            submitBtn.disabled = false;
+            progressText.textContent = 'Concluído.';
         });
     </script>
 </body>
-
 </html>
